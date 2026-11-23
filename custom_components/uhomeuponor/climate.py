@@ -8,12 +8,12 @@ from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
     HVACMode, PRESET_COMFORT, PRESET_ECO, PRESET_AWAY, HVACAction, ClimateEntityFeature)
 from homeassistant.const import (ATTR_TEMPERATURE, CONF_PREFIX, PRECISION_TENTHS, UnitOfTemperature)
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from logging import getLogger
 
+from .const import CONF_SUPPORTS_COOLING, CONF_SUPPORTS_HEATING
+from .coordinator import UponorCoordinator
 from .uponor_api.const import (DOMAIN, UHOME_MODE_HEAT, UHOME_MODE_COOL, UHOME_MODE_ECO, UHOME_MODE_COMFORT)
-
-CONF_SUPPORTS_HEATING = "supports_heating"
-CONF_SUPPORTS_COOLING = "supports_cooling"
 
 ATTR_TECHNICAL_ALARM = "technical_alarm"
 ATTR_RF_SIGNAL_ALARM = "rf_alarm"
@@ -31,18 +31,19 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     supports_cooling = config.get(CONF_SUPPORTS_COOLING, True)
 
     uponor = hass.data[DOMAIN][config_entry.entry_id]["client"]
+    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
 
-    async_add_entities([UponorThermostat(prefix, uponor, thermostat, supports_heating, supports_cooling)
-                  for thermostat in uponor.thermostats], True)
+    async_add_entities([UponorThermostat(coordinator, prefix, uponor, thermostat, supports_heating, supports_cooling)
+                  for thermostat in uponor.thermostats])
     
     _LOGGER.info("finish setup climate platform for Uhome Uponor")
     return True
 
-class UponorThermostat(ClimateEntity):
+class UponorThermostat(CoordinatorEntity[UponorCoordinator], ClimateEntity):
     """HA Thermostat climate entity. Utilizes Uponor U@Home API to interact with U@Home"""
 
-    def __init__(self, prefix, uponor_client, thermostat, supports_heating, supports_cooling):
-        self._available = False
+    def __init__(self, coordinator, prefix, uponor_client, thermostat, supports_heating, supports_cooling):
+        super().__init__(coordinator)
         self.prefix = prefix
         self.uponor_client = uponor_client
         self.thermostat = thermostat
@@ -71,11 +72,11 @@ class UponorThermostat(ClimateEntity):
 
     @property
     def available(self):
-        return self._available
+        return super().available and self.thermostat.is_valid()
 
     # ** Static **
     @property
-    def temperature_unit(self):
+    def native_temperature_unit(self):
         return UnitOfTemperature.CELSIUS
 
     @property
@@ -112,13 +113,28 @@ class UponorThermostat(ClimateEntity):
         return self.thermostat.by_name('rh_value').value
 
     @property
-    def current_temperature(self):
+    def native_current_temperature(self):
         return self.thermostat.by_name('room_temperature').value
 
     @property
-    def target_temperature(self):
+    def native_target_temperature(self):
         return self.thermostat.by_name('room_setpoint').value
-    
+
+    # Home Assistant versions without the native_* climate API read these names.
+    # Versions with that API use the native_* members when a class provides both,
+    # without a deprecation warning.
+    @property
+    def temperature_unit(self):
+        return self.native_temperature_unit
+
+    @property
+    def current_temperature(self):
+        return self.native_current_temperature
+
+    @property
+    def target_temperature(self):
+        return self.native_target_temperature
+
     @property
     def extra_state_attributes(self):
         return {
@@ -154,26 +170,16 @@ class UponorThermostat(ClimateEntity):
             return HVACAction.COOLING
 
     # ** Actions **
-    async def async_update(self):
-        # Update Uhome (to get HC mode) and thermostat
-        try:
-            await self.uponor_client.update_devices(self.uponor_client.uhome, self.thermostat)
-            valid = self.thermostat.is_valid()
-            self._available = valid
-            if not valid:
-                _LOGGER.debug("The thermostat '%s' had invalid data, and is therefore unavailable", self.identity)
-        except Exception as ex:
-            self._available = False
-            _LOGGER.error("Uponor thermostat was unable to update: %s", ex)
-
+    # set_values() applies the new value locally; the delayed refresh reads back
+    # what the gateway actually stored, for all entities at once.
     async def async_set_hvac_mode(self, hvac_mode):
         if hvac_mode == HVACMode.HEAT:
             value = UHOME_MODE_HEAT
         else:
             value = UHOME_MODE_COOL
         await self.thermostat.set_hvac_mode(value)
-        self.uponor_client.uhome.last_update = None
         self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
 
     # Support setting preset_mode
     async def async_set_preset_mode(self, preset_mode):
@@ -188,15 +194,14 @@ class UponorThermostat(ClimateEntity):
         else:
             value = UHOME_MODE_COMFORT
         await self.thermostat.set_preset_mode(value)
-        self.uponor_client.uhome.last_update = None
-        self.thermostat.last_update = None
         self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
 
     async def async_set_temperature(self, **kwargs):
         if kwargs.get(ATTR_TEMPERATURE) is None:
             return
         temperature = kwargs.get(ATTR_TEMPERATURE)
         await self.thermostat.set_setpoint(temperature)
-        self.thermostat.last_update = None
         self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
             

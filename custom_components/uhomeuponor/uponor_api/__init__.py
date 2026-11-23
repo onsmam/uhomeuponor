@@ -134,6 +134,13 @@ class UponorClient(object):
                     continue
                 raise UponorAPIException("API call error", last_error) from last_error
     
+    def _thermostat_value_dict(self):
+        """Map value id -> UponorValue for all thermostats (used by validate_values)"""
+        allvalue_dict = {}
+        for device in self.thermostats:
+            allvalue_dict.update(device.properties_byid)
+        return allvalue_dict
+
     async def update_devices(self, *devices):
         """Updates all values of all devices provided by making API calls. Only devices not updated recently will be considered"""
         async with self._update_lock:
@@ -152,14 +159,7 @@ class UponorClient(object):
                 values.extend(device.properties_byid.values())
                 device.pending_update = True
 
-            #Create dict for all devices
-            allvalues = []
-            for device in self.thermostats:
-                allvalues.extend(device.properties_byid.values())
-            allvalues = flatten(allvalues)
-            allvalue_dict = {}
-            for value in allvalues:
-                allvalue_dict[value.id] = value
+            allvalue_dict = self._thermostat_value_dict()
 
             try:
                 # Update all values, but at most N at a time
@@ -167,13 +167,79 @@ class UponorClient(object):
                     await self.update_values(allvalue_dict, value_list)
             except Exception as e:
                 _LOGGER.exception(e)
+                raise
+            finally:
+                # Always clear the flag, also on CancelledError (not an Exception).
+                # A flag left at True excludes the device from every later update,
+                # freezing its values while the entity stays available.
                 for device in devices_to_update:
                     device.pending_update = False
-                raise
 
             for device in devices_to_update:
                 device.last_update = datetime.now()
-                device.pending_update = False
+
+    async def async_poll(self):
+        """Read U@Home and all thermostats, bypassing the per-device cache.
+
+        Called by the DataUpdateCoordinator once per interval. Devices are packed
+        whole into batches of at most max_values_batch values (21 + 10 x 12 values
+        -> 4 requests for 10 thermostats).
+        """
+        async with self._update_lock:
+            devices = [self.uhome, *self.thermostats]
+            allvalue_dict = self._thermostat_value_dict()
+            for batch in self._device_batches(devices):
+                await self._read_devices(batch, allvalue_dict)
+            now = datetime.now()
+            for device in devices:
+                device.last_update = now
+
+    def _device_batches(self, devices):
+        """Group whole devices into batches of at most max_values_batch values"""
+        batch = []
+        size = 0
+        for device in devices:
+            count = len(device.properties_byid)
+            if batch and size + count > self.max_values_batch:
+                yield batch
+                batch = []
+                size = 0
+            batch.append(device)
+            size += count
+        if batch:
+            yield batch
+
+    async def _read_devices(self, devices, allvalue_dict):
+        """Read all values of the given devices in one request.
+
+        validate_values() runs per thermostat, so the firmware-bug detection
+        (3 values equal to the next thermostat) keeps the same meaning as with
+        one thermostat per request. Only the affected thermostat is skipped.
+        """
+        req = self.create_request("read")
+        for device in devices:
+            for value in device.properties_byid.values():
+                self.add_request_object(req, {'id': str(value.id), 'properties': {str(value.property): {}}})
+
+        response_data = await self.do_rest_call(req)
+
+        try:
+            objects = response_data['result']['objects']
+        except (KeyError, TypeError) as ex:
+            raise UponorAPIException("Unexpected API response", ex) from ex
+
+        for device in devices:
+            device_objects = [obj for obj in objects if _object_id(obj) in device.properties_byid]
+            if isinstance(device, UponorThermostat) and \
+                    not self.validate_values({'result': {'objects': device_objects}}, allvalue_dict):
+                continue
+            for obj in device_objects:
+                try:
+                    value = device.properties_byid[int(obj['id'])]
+                    data_val = obj['properties'][value.property]['value']
+                except (KeyError, TypeError, ValueError):
+                    continue
+                value.value = data_val
 
     async def update_values(self, allvalue_dict, *values):
         """Updates all values provided by making API calls"""
@@ -296,12 +362,21 @@ class UponorClient(object):
             obj = {'id': str(tpl[0].id), 'properties': {str(tpl[0].property): {'value': str(tpl[1])}}}
             self.add_request_object(req, obj)
 
-        response = await self.do_rest_call(req)
+        # Same lock as the reads: no write lands in the middle of a poll whose
+        # older read results would then overwrite the new value
+        async with self._update_lock:
+            response = await self.do_rest_call(req)
         _LOGGER.debug("set_values: response: %s", response)
 
         # Apply new values, after the API call succeeds
         for tpl in value_tuples:
             tpl[0].value = tpl[1]
+
+def _object_id(obj):
+    try:
+        return int(obj['id'])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 class UponorValue(object):
     """Single value in the Uponor API"""
