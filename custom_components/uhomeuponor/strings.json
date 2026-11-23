@@ -31,7 +31,8 @@
           "host": "Host or IP address of the Uponor Gateway",
           "prefix": "Entities prefix",
           "supports_heating": "Uponor supports heating",
-          "supports_cooling": "Uponor supports cooling"
+          "supports_cooling": "Uponor supports cooling",
+          "scan_interval": "Polling interval in seconds (30-600)"
         }
       }
     }

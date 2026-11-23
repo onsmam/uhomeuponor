@@ -30,7 +30,8 @@
           "host": "Host o dirección IP del Gateway Uponor",
           "prefix": "Prefijo para las entidades",
           "supports_heating": "Uponor soporta calentar",
-          "supports_cooling": "Uponor soporta refrigerar"
+          "supports_cooling": "Uponor soporta refrigerar",
+          "scan_interval": "Intervalo de sondeo en segundos (30-600)"
         }
       }
     }

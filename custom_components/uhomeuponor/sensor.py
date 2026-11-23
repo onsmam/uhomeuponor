@@ -8,11 +8,16 @@ Exposes Sensors for Uponor devices, such as:
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass, SensorEntity
 from homeassistant.const import CONF_PREFIX, UnitOfTemperature
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from logging import getLogger
 
+from .coordinator import UponorCoordinator
 from .uponor_api.const import (DOMAIN, UNIT_BATTERY, UNIT_HUMIDITY)
 
 _LOGGER = getLogger(__name__)
+
+# Read-only entities, all data comes from the coordinator
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
@@ -21,24 +26,25 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     prefix = config.get(CONF_PREFIX, "")
 
     uponor = hass.data[DOMAIN][config_entry.entry_id]["client"]
+    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
 
-    async_add_entities([UponorThermostatTemperatureSensor(prefix, uponor, thermostat)
-                  for thermostat in uponor.thermostats], True)
+    async_add_entities([UponorThermostatTemperatureSensor(coordinator, prefix, uponor, thermostat)
+                  for thermostat in uponor.thermostats])
 
-    async_add_entities([UponorThermostatHumiditySensor(prefix, uponor, thermostat)
-                  for thermostat in uponor.thermostats], True)
+    async_add_entities([UponorThermostatHumiditySensor(coordinator, prefix, uponor, thermostat)
+                  for thermostat in uponor.thermostats])
 
-    async_add_entities([UponorThermostatBatterySensor(prefix, uponor, thermostat)
-                  for thermostat in uponor.thermostats], True)
+    async_add_entities([UponorThermostatBatterySensor(coordinator, prefix, uponor, thermostat)
+                  for thermostat in uponor.thermostats])
 
     _LOGGER.info("finish setup sensor platform for Uhome Uponor")
     return True
 
-class UponorThermostatTemperatureSensor(SensorEntity):
+class UponorThermostatTemperatureSensor(CoordinatorEntity[UponorCoordinator], SensorEntity):
     """HA Temperature sensor entity. Utilizes Uponor U@Home API to interact with U@Home"""
 
-    def __init__(self, prefix, uponor_client, thermostat):
-        self._available = False
+    def __init__(self, coordinator, prefix, uponor_client, thermostat):
+        super().__init__(coordinator)
         self.prefix = prefix
         self.uponor_client = uponor_client
         self.thermostat = thermostat
@@ -69,7 +75,7 @@ class UponorThermostatTemperatureSensor(SensorEntity):
 
     @property
     def available(self):
-        return self._available
+        return super().available and self.thermostat.is_valid()
 
     # ** DEBUG PROPERTY  **
     # @property
@@ -98,24 +104,12 @@ class UponorThermostatTemperatureSensor(SensorEntity):
     def native_value(self):
         return self.thermostat.by_name('room_temperature').value
 
-    # ** Actions **
-    async def async_update(self):
-        # Update thermostat
-        try:
-            await self.thermostat.async_update()
-            valid = self.thermostat.is_valid()
-            self._available = valid
-            if not valid:
-                _LOGGER.debug("The thermostat temperature sensor '%s' had invalid data, and is therefore unavailable", self.identity)
-        except Exception as ex:
-            self._available = False
-            _LOGGER.error("Uponor thermostat temperature sensor was unable to update: %s", ex)
 
-class UponorThermostatHumiditySensor(SensorEntity):
+class UponorThermostatHumiditySensor(CoordinatorEntity[UponorCoordinator], SensorEntity):
     """HA Humidity sensor entity. Utilizes Uponor U@Home API to interact with U@Home"""
 
-    def __init__(self, prefix, uponor_client, thermostat):
-        self._available = False
+    def __init__(self, coordinator, prefix, uponor_client, thermostat):
+        super().__init__(coordinator)
         self.prefix = prefix
         self.uponor_client = uponor_client
         self.thermostat = thermostat
@@ -146,7 +140,7 @@ class UponorThermostatHumiditySensor(SensorEntity):
 
     @property
     def available(self):
-        return self._available
+        return super().available and self.thermostat.is_valid()
 
     # ** Static **
     @property
@@ -166,25 +160,12 @@ class UponorThermostatHumiditySensor(SensorEntity):
     def native_value(self):
         return self.thermostat.by_name('rh_value').value
 
-    # ** Actions **
-    async def async_update(self):
-        # Update thermostat
-        try:
-            await self.thermostat.async_update()
-            valid = self.thermostat.is_valid()
-            self._available = valid
 
-            if not valid:
-                _LOGGER.debug("The thermostat humidity sensor '%s' had invalid data, and is therefore unavailable", self.identity)
-        except Exception as ex:
-            self._available = False
-            _LOGGER.error("Uponor thermostat humidity sensor was unable to update: %s", ex)
-
-class UponorThermostatBatterySensor(SensorEntity):
+class UponorThermostatBatterySensor(CoordinatorEntity[UponorCoordinator], SensorEntity):
     """HA Battery sensor entity. Utilizes Uponor U@Home API to interact with U@Home"""
 
-    def __init__(self, prefix, uponor_client, thermostat):
-        self._available = False
+    def __init__(self, coordinator, prefix, uponor_client, thermostat):
+        super().__init__(coordinator)
         self.prefix = prefix
         self.uponor_client = uponor_client
         self.thermostat = thermostat
@@ -211,7 +192,7 @@ class UponorThermostatBatterySensor(SensorEntity):
 
     @property
     def available(self):
-        return self._available
+        return super().available and self.thermostat.is_valid()
 
     # ** Static **
     @property
@@ -230,17 +211,3 @@ class UponorThermostatBatterySensor(SensorEntity):
             return 10
 
         return 100
-
-    # ** Actions **
-    async def async_update(self):
-        # Update thermostat
-        try:
-            await self.thermostat.async_update()
-            valid = self.thermostat.is_valid()
-            self._available = valid
-
-            if not valid:
-                _LOGGER.debug("The thermostat battery sensor '%s' had invalid data, and is therefore unavailable", self.identity)
-        except Exception as ex:
-            self._available = False
-            _LOGGER.error("Uponor thermostat battery sensor was unable to update: %s", ex)

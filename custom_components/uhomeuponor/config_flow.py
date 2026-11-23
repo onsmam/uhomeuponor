@@ -7,14 +7,17 @@ from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import logging
 import voluptuous as vol
-from homeassistant.const import (CONF_HOST, CONF_PREFIX)
+from homeassistant.const import (CONF_HOST, CONF_PREFIX, CONF_SCAN_INTERVAL)
+from .const import (
+    CONF_SUPPORTS_COOLING,
+    CONF_SUPPORTS_HEATING,
+    DEFAULT_SCAN_INTERVAL,
+    MAX_SCAN_INTERVAL,
+    MIN_SCAN_INTERVAL,
+)
 from .uponor_api.const import DOMAIN
-from .uponor_api import UponorClient, UponorAPIException
 
 _LOGGER = logging.getLogger(__name__)
-
-CONF_SUPPORTS_HEATING = "supports_heating"
-CONF_SUPPORTS_COOLING = "supports_cooling"
 
 class UhomeuponorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Uponor config flow."""
@@ -104,6 +107,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         _LOGGER.info("Init Option config step uhomeuponor")
         errors = {}
         options = self.config_entry.data
+        scan_interval = self.config_entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
         if user_input is not None:
             try:
                 data = {
@@ -115,6 +119,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     CONF_SUPPORTS_COOLING: user_input.get(
                         CONF_SUPPORTS_COOLING, options.get(CONF_SUPPORTS_COOLING, True)
                     ),
+                    # Options only, never copied to data (see _apply_options)
+                    CONF_SCAN_INTERVAL: user_input.get(CONF_SCAN_INTERVAL, scan_interval),
                 }
                 _LOGGER.debug("user_input data: %s, id: %s", data, self.config_entry.entry_id)
                 title = "Uhome Uponor"
@@ -134,6 +140,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     vol.Optional(CONF_PREFIX, default=options.get(CONF_PREFIX, "")): str,
                     vol.Optional(CONF_SUPPORTS_HEATING, default=options.get(CONF_SUPPORTS_HEATING, True)): bool,
                     vol.Optional(CONF_SUPPORTS_COOLING, default=options.get(CONF_SUPPORTS_COOLING, True)): bool,
+                    vol.Optional(CONF_SCAN_INTERVAL, default=scan_interval): vol.All(
+                        vol.Coerce(int), vol.Range(min=MIN_SCAN_INTERVAL, max=MAX_SCAN_INTERVAL)
+                    ),
                 }
             ), errors=errors
         )

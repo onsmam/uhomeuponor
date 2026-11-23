@@ -43,6 +43,17 @@ Uhome Uponor is a python custom_component for connect Home Assistant with Uponor
   
   supports_cooling: True      # Optional, set to False to exclude Cooling as an HVAC Mode
   
+  scan_interval: 60           # Options only, polling interval in seconds (30-600, default 60)
+  
+## Polling
+
+All entities share one central poll (DataUpdateCoordinator): every `scan_interval` seconds U@Home and all thermostats are read in batches of at most 40 values (4 requests for 10 thermostats). Change the interval under Settings > Devices & services > Uhome Uponor > Configure; this does not recreate devices or entities. Only a change of host or prefix does.
+
+- Keep "Enable polling" switched on in the integration's system options, otherwise no polls are scheduled.
+- After a setpoint, preset or HVAC mode change the values are read back after about 3 seconds.
+- If the gateway does not respond, all entities become `unavailable` and recover at the next successful poll.
+- If the gateway keeps failing for 10 minutes, the integration reloads itself once (at most once per 30 minutes).
+
 Currently this module creates the following entities, for each thermostat:
 
 * Climate:
